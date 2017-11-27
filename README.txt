@@ -90,14 +90,6 @@ number モンスター番号 (敵を指定するときに使う)
 level  モンスターのレベル
 hp     モンスターのHP
 
-・装備モード時に送られるJSONデータ
-{"equip":1,"now":{"name":"なし","str":0,"hp":0,"agi":0},"discover":{"name":"もげぞーの剣","str":1,"hp":0,"agi":0}}
-
-now       現在装備してる武器
-desicover 発見した武器
-str       攻撃力
-hp        HP
-agi       agi
 
 ・バトル時の敵の行動ターン時
 {"damage-info":1,"monsters":[{"name":"ヒドラ","number":5,"level":2,"hp":2,"damage":["hp",1]},{"name":"メタルヨテイチ","number":4,"level":10,"hp":3,"damage":["no"]},{"name":"ヒドラ","number":3,"level":1,"hp":1,"damage":["hp",1]},{"name":"ヒドラ","number":2,"level":5,"hp":5,"damage":["hp",2]},{"name":"ヒドラ","number":1,"level":4,"hp":4,"damage":["hp",2]},{"name":"ブリガンド","number":0,"level":2,"hp":11,"damage":["hp",2]}],"player":{"hp":22,"maxhp":30,"str":30,"maxstr":30,"agi":30,"maxagi":30,"level":1,"exp":0,"heal":2,"hammer":5,"map-level":1,"buki":["なし",0,0,0],"pos":{"x":0,"y":0}}}
@@ -110,6 +102,16 @@ agi       agi
 "damage":["all",1]   プレイヤーのすべてのステータスに1ダメージ与えた
 
 ※このデータが送られてきた場合は、AIはなにも出力しなくていいです※
+
+
+・装備モード時に送られるJSONデータ
+{"equip":1,"now":{"name":"なし","str":0,"hp":0,"agi":0},"discover":{"name":"もげぞーの剣","str":1,"hp":0,"agi":0}}
+
+now       現在装備してる武器
+desicover 発見した武器
+str       攻撃力
+hp        HP
+agi       agi
 
 
 ・レベルアップモード時に送られるJSONデータ
