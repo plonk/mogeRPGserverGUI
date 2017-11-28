@@ -4,6 +4,10 @@ http://mogerpg.pcgw.pgw.jp/
 でプレイできるゲームを、標準入出力のやり取りだけで
 攻略するAIを作るゲームです。
 
+起動にはtcl,tkが必要です。
+ubuntuなら sudo apt install tcl tk でインストールできます。
+動作確認済み　ubuntuのみ
+
 ・ダウンロード
 https://github.com/fusuya/mogeRPGserverGUI/releases
 
