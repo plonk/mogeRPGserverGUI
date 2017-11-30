@@ -853,14 +853,14 @@
 	      (return-from gui-start)))
       (set-geometry *tk* 700 550 200 200)
       (let* ((f (make-instance 'frame))
-	     (f2 (make-instance 'frame))
+	     (f2 (make-instance 'frame :width 500 :height 400))
 	     (f0 (make-instance 'frame))
 	     (fr0 (make-instance 'labelframe :width 10 :master f0 :text "AI起動コマンド"))
 	     (fr1 (make-instance 'labelframe :width 5 :master f :text "バトルディレイ"))
 	     (fr2 (make-instance 'labelframe :width 5 :master f :text "マップディレイ"))
 	     (fr3 (make-instance 'labelframe :width 5 :master f :text "もげぞうディレイ"))
-	     (fr4 (make-instance 'labelframe :width 10 :master f2 :text "画面"))
-	     (gamen (make-instance 'label :master fr4 :text (format nil "AIを読み込んでください。")
+	     (fr4 (make-instance 'labelframe :width 500 :height 400 :master f2 :text "画面"))
+	     (gamen (make-instance 'label :master fr4 :width 500 :text (format nil "AIを読み込んでください。")
 					  :font "Takaoゴシック 14 normal"))
 	     (ai-load (make-instance 'entry :width 20 :master fr0 :text (get-ai-command-line)))
 	     (ai-btn (make-instance 'button :master fr0 :text "AI読み込み！"))
@@ -868,15 +868,16 @@
 	     (restart-btn  (make-instance 'button :master f :text "再挑戦"))
 	     ;;(pass (make-instance 'entry :width 5 :master fr2))
 	     (vals (list 0 1 2 3 4 5 6 7 8 9 10)) ;;ディレイ秒数リスト
-	     (battle-d (make-instance 'spinbox :width 5 :master fr1 :values vals
+	     (battle-d (make-instance 'spinbox :width 5 :master fr1 :from 0 :to 10 :text 3 :relief "solid"
+				      ;;初期値設定するためには:valuesではなく:from :toを使って:textで初期値を決める
 					       :command (lambda (val) ;;文字列になってる
 							  (setf *battle-delay-seconds*
 								(/ (parse-integer val) 10.0)
 								*bds* (/ (parse-integer val) 10.0)))))
-	     (map-d (make-instance 'spinbox :width 5 :master fr2 :values vals
+	     (map-d (make-instance 'spinbox :width 5 :master fr2 :from 0 :to 10 :text 3
 					    :command (lambda (val) (setf *map-delay-seconds*
 									 (/ (parse-integer val) 10.0)))))
-	     (moge-d (make-instance 'spinbox :width 5 :master fr3 :values vals
+	     (moge-d (make-instance 'spinbox :width 5 :master fr3 :from 0 :to 10 :text 3
 					     :command (lambda (val) (setf *boss-delay-seconds*
 									  (/ (parse-integer val) 10.0)))))
 	     (stop-btn (make-instance 'button :master f :text "ストップ！"))
@@ -884,11 +885,11 @@
 	(pack f0)
 	(pack (list fr0 ai-load ai-btn clear-btn) :fill :both :side :left)
 	(pack f)
-	(pack f2)
+	(pack f2 )
 	(pack (list fr3 fr1 fr2 start-btn stop-btn restart-btn) :fill :both :side :left :expand t)
 	(pack (list moge-d battle-d map-d) :fill :both :side :left :expand t)
-	(pack fr4)
-	(pack gamen)
+	(pack fr4 )
+	(pack gamen )
 	(setf (command start-btn);;スタートボタン
 	      (lambda ()
 		(if (null *ai-name*)
