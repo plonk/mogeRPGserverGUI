@@ -103,6 +103,7 @@ hp     モンスターのHP
 "damage":["agi",1] プレイヤーのAGIに1ダメージ与えた
 "damage":["str",1] プレイヤーのSTRに1ダメージ与えた
 "damage":["no"]    なにもしなかった
+"damage":["heal",5]  敵がHP5回復した。
 "damage":["all",1]   プレイヤーのすべてのステータスに1ダメージ与えた
 
 ※このデータが送られてきた場合は、AIはなにも出力しなくていいです※
@@ -161,4 +162,29 @@ AIはなにも出力しなくていいです。
 "AGI"  素早さ、1ターンに攻撃できる回数に影響(60~74で5回行動、45~59で4回行動、30~44で3回行動、15~29で2回行動、14以下で1回行動)
 のいずれかです。
 増やしたいステータスを出力してください
+
+
+・エラーメッセージ
+
+1 AIプログラムを起動できない場合
+2 AIが名前として空行を送って来た場合
+3 AIの予期せぬ終了などでパイプへの書き込み、読み込みができない場合
+
+1,
+Couldn't execute "hoge": そのようなファイルやディレクトリはありません
+
+2,
+AIの名前が空です。
+AIから名前を受け取ることができませんでした。
+
+2,
+end of file on #<TWO-WAY-STREAM
+                 :INPUT-STREAM #<SB-SYS:FD-STREAM for "descriptor 6" {1002DFAB93}>
+                 :OUTPUT-STREAM #<SB-SYS:FD-STREAM for "descriptor 5" {1002DFA763}>>
+AIから名前を受け取ることができませんでした。
+
+3,
+ストリームエラーが発生しました。
+Couldn't write to #<SB-SYS:FD-STREAM for "descriptor 5" {1002DFAAA3}>:
+  Broken pipe
 

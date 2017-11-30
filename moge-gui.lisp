@@ -42,11 +42,15 @@
   (with-open-file (in "ai.txt" :direction :input)
     (format nil "~a" (read-line in nil))))
 
+(defun init-stream ()
+  (setf *ai* nil)
+  (setf *ai* (make-two-way-stream (sb-ext:process-output *proc*) (sb-ext:process-input *proc*))))
+
 (define-condition handshake-error (error) ())
 
 ;;ai.txtからai起動するコマンドを読み込む
 ;;*ai* ストリーム？
-(defun load-ai (com gamen)
+(defun load-ai (com)
   (let* ((hoge (ppcre:split #\space com))
 	 (atama nil) (mozi ""))
     (setf *proc* (sb-ext:run-program
@@ -75,7 +79,7 @@
        (setf *ai-atama* (format nil "~c" (code-char (+ 65248 (char-code atama))))))
       (t
        (setf *ai-atama* "主")))
-    (setf (text gamen) (format nil mozi))))
+    mozi))
 
 ;;ゲームオーバーメッセージ
 (defun game-over-message (p gamen)
@@ -480,13 +484,13 @@
 
 ;;バトル時、プレイヤーが死ぬかモンスターが全滅するまでループ
 (defun game-loop (p gamen)
-  (unless (or (player-dead p) (monsters-dead))
+  (unless (or (player-dead p) (monsters-dead) *battle-end*)
     (dotimes (k (1+ (truncate (/ (max 0 (player-agi p)) 15))))
-      (unless (or (monsters-dead) (= *end* 2))
+      (unless (or (monsters-dead) (= *end* 2) *battle-end*)
 	(player-attack2 p gamen)
 	(ltk:process-events)))
     (cond
-      ((= *end* 2) ;;エラー集雨量
+      ((or (= *end* 2) *battle-end*) ;;エラー集雨量
        nil)
       ((null (monsters-dead))
        ;;敵の攻撃ダメージ情報を渡すだけ
@@ -522,7 +526,7 @@
     ((player-dead p) ;;プレイヤーが死んだとき
      (game-over-message p gamen)
      (setf *end* 2))
-    ((= *end* 2) ;;エラー終了
+    ((or (= *end* 2) *battle-end*) ;;エラー終了
      nil)
     (t ;;(monsters-dead) 敵を倒したとき
      ;;(gamen-clear)
@@ -816,10 +820,29 @@
       (format t "~A~%" c)
       (setf (text gamen) (format nil "~A~%" c)))))
 
+
+(defun restart-da (ai-load)
+  (let ((hoge nil))
+    (kill-proc)
+    (init-data)
+    
+    (handler-case
+	(setf hoge (load-ai (text ai-load)))
+      (simple-error (c);;AIコマンドが存在しない、実行許可がないなど
+	(format t "~A~%" c)
+	(setf hoge (concatenate 'string hoge (format nil " ~A~%" c))))
+      (handshake-error (c)
+	(declare (ignore c))
+	(format t "AIから名前を受け取ることができませんでした。~%")
+	(setf hoge (concatenate 'string hoge (format nil "AIから名前を受け取ることができませんでした。~%")))))
+    (format t "再挑戦！~%")
+    ;;(game-rupu map p gamen)))
+    (setf hoge (concatenate 'string hoge (format nil "再挑戦します。~%スタートボタンを押してください。")))
+    hoge))
+
 (defun gui-start ()
   (let ((p (make-player))
         (map (make-donjon)))
-    ;;(load-ai)
     (setf *random-state* (make-random-state t))
     (maze map p)
     (with-ltk ()
@@ -839,14 +862,13 @@
 	     (fr4 (make-instance 'labelframe :width 10 :master f2 :text "画面"))
 	     (gamen (make-instance 'label :master fr4 :text (format nil "AIを読み込んでください。")
 					  :font "Takaoゴシック 14 normal"))
-	     ;;(error? "") 
 	     (ai-load (make-instance 'entry :width 20 :master fr0 :text (get-ai-command-line)))
 	     (ai-btn (make-instance 'button :master fr0 :text "AI読み込み！"))
 	     (clear-btn  (make-instance 'button :master f0 :text "初期化"))
 	     (restart-btn  (make-instance 'button :master f :text "再挑戦"))
 	     ;;(pass (make-instance 'entry :width 5 :master fr2))
 	     (vals (list 0 1 2 3 4 5 6 7 8 9 10)) ;;ディレイ秒数リスト
-	     (battle-d (make-instance 'spinbox :width 5 :master fr1 :values vals :text "0.3"
+	     (battle-d (make-instance 'spinbox :width 5 :master fr1 :values vals
 					       :command (lambda (val) ;;文字列になってる
 							  (setf *battle-delay-seconds*
 								(/ (parse-integer val) 10.0)
@@ -872,7 +894,8 @@
 		(if (null *ai-name*)
 		    (setf (text gamen) (format nil "AIを読み込んでください！！"))
 		    (progn
-		      (setf *rupu* t)
+		      (setf *rupu* t
+			    *battle-end* nil)
 		      (game-rupu map p gamen)))))
 	(setf (command stop-btn) ;;ストップボタン
 	      (lambda () (setf *rupu* nil)))
@@ -882,22 +905,22 @@
 		(init-data)
 		(setf p (make-player)
 		      map (make-donjon)
+		      *battle-end* t
 		      *rupu* nil)
 		(maze map p)
 		(setf (text gamen) (format nil "初期化されました。~%AIを読み込んでください。"))))
 	(setf (command restart-btn) ;;再挑戦ボタン
 	      (lambda ()
-		(init-data)
 		(setf p (make-player)
 		      map (make-donjon)
-		      *rupu* t)
+		      *battle-end* t
+		      *rupu* nil)
 		(maze map p)
-		(game-rupu map p gamen)))
-		;;(setf (text gamen) (format nil "再挑戦します。~%スタートボタンを押してください。"))))
+		(setf (text gamen) (format nil (restart-da ai-load)))))
 	(setf (command ai-btn) ;;AI読み込みボタン
 	      (lambda ()
 		(handler-case
-		    (load-ai (text ai-load) gamen)
+		    (setf (text gamen) (format nil (load-ai (text ai-load))))
 		  (simple-error (c);;AIコマンドが存在しない、実行許可がないなど
 		    (format t "~A~%" c)
 		    (setf (text gamen) (format nil "~A~%" c)))

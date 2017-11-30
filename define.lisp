@@ -29,6 +29,7 @@
 
 (defparameter *gamen-clear?* t)
 (defparameter *rupu* t)
+(defparameter *battle-end* nil)
 
 (defparameter *map100*
   #2A((40 40 40 40 40 40 40 40 40 40 40)
