@@ -133,3 +133,26 @@
 	 ((= (player-map p) 50)
 	  (set-boss-kaidan map 7))
 	 (t (set-boss-kaidan map 0)))))))
+
+(defun make-random-donjon ()
+  (let ((map (make-donjon)))
+    (setf (donjon-yoko map) *yoko*
+          (donjon-tate map) *tate*)
+    (setf (donjon-map map) (make-array (list (donjon-tate map) (donjon-yoko map))));;マップ配列作成
+    (init-map (donjon-map map) (donjon-tate map) (donjon-yoko map)) ;;マップ初期化
+    (setf (donjon-stop-list map) nil)
+    (let* ((x (random (floor (donjon-yoko map) 2)))
+           (y (random (floor (donjon-tate map) 2)))
+           (startx (+ (* x 2) 1)) ;;奇数座標を初期位置にする
+           (starty (+ (* y 2) 1)))
+      (setf (aref (donjon-map map) starty startx) 0) ;;初期位置を通路にする
+      (recursion starty startx map) ;;迷路生成
+      (loop until (<= 2 (length (donjon-stop-list map)))
+            do
+            ;; 行き止まりが 1 つしか無かったのでやりなおし
+            (init-map (donjon-map map) (donjon-tate map) (donjon-yoko map))
+            (setf (donjon-stop-list map) nil)
+            (setf (aref (donjon-map map) starty startx) 0)
+            (recursion starty startx map))
+      (push (list starty startx) (donjon-stop-list map))) ;;主人公の位置
+    map))

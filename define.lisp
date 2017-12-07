@@ -17,10 +17,7 @@
 (defparameter *ha2ne2* nil)
 (defparameter *copy-buki* (copy-tree *buki-d*))
 (defparameter *proc* nil)
-(defparameter *ai* nil)
-(defparameter *ai-name* nil)
-(defparameter *ai-atama* nil)
-(defparameter *ai-command-line* nil)
+(defparameter *ais* nil)
 
 (defparameter *battle-delay-seconds* 0.3)
 (defparameter *bds* 0.3)
@@ -47,6 +44,7 @@
 
 
 (defstruct player
+  (num nil)
   (hp 30)
   (maxhp 30)
   (agi 30)

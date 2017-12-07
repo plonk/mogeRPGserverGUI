@@ -1,7 +1,3 @@
-
-
-
-
 (load "define.lisp" :external-format :utf-8)
 (load "maze-test.lisp" :external-format :utf-8)
 (load "util.lisp" :external-format :utf-8)
@@ -19,14 +15,16 @@
 	       :|buki|      (player-buki p)
 	       :|pos|   (list :|x| (player-posx p) :|y| (player-posy p)))))
 
-(defun kill-proc ()
-  (if *proc*
-      (progn
-	(sb-ext:process-kill *proc* 15) ;;プロセスキルのはず
-	(setf *proc* nil
-	      *ai* nil
-	      *ai-name* nil
-	      *ai-atama* nil))))
+(defun ai-kill-proc (ai)
+  (let ((unix-signal-term 15))
+    (when (ai-proc ai)
+      (sb-ext:process-kill (ai-proc ai) unix-signal-term))))
+
+(defun kill-all-ais ()
+  (loop for ai in *ais*
+	do
+	(ai-kill-proc ai)))
+
 (defun init-data ()
   (setf *battle?* nil
 	*monster-num* 6
@@ -42,44 +40,59 @@
   (with-open-file (in "ai.txt" :direction :input)
     (format nil "~a" (read-line in nil))))
 
-(defun init-stream ()
-  (setf *ai* nil)
-  (setf *ai* (make-two-way-stream (sb-ext:process-output *proc*) (sb-ext:process-input *proc*))))
-
 (define-condition handshake-error (error) ())
 
-;;ai.txtからai起動するコマンドを読み込む
-;;*ai* ストリーム？
-(defun load-ai (com)
-  (let* ((hoge (ppcre:split #\space com))
-	 (atama nil) (mozi ""))
-    (setf *proc* (sb-ext:run-program
-                  (car hoge) (cdr hoge)
-                  :input :stream
-                  :output :stream
-                  :wait nil
-                  :search t))
-    (setf *ai* (make-two-way-stream (sb-ext:process-output *proc*) (sb-ext:process-input *proc*)))
-    (handler-case
-	(setf *ai-name* (read-line *ai*))
-      (end-of-file (c)
-	(format t "~A~%" c)
-	(setf mozi (concatenate 'string mozi (format nil "~A~%" c)))
-	(error 'handshake-error)))
-    (when (equal *ai-name* "")
-      (format t "AIの名前が空です。~%")
-      (setf mozi (concatenate 'string mozi (format nil "AIの名前が空です。~%")))
-      (error 'handshake-error))
-    (setf mozi (concatenate 'string mozi (format nil *ai-name*)))
-    (setf atama (char *ai-name* 0))
+(defun ascii->zenkaku (char)
+  (code-char (+ 65248 (char-code char))))
+
+(defun atama-of (name)
+  (let ((atama (char name 0)))
     (cond
-      ((= 2 (moge-char-width atama))
-       (setf *ai-atama* (format nil "~c" atama)))
-      ((= 1 (moge-char-width atama))
-       (setf *ai-atama* (format nil "~c" (code-char (+ 65248 (char-code atama))))))
-      (t
-       (setf *ai-atama* "主")))
-    mozi))
+     ((= 2 (moge-char-width atama))
+      (format nil "~c" atama))
+     ((= 1 (moge-char-width atama))
+      (format nil "~c" (ascii->zenkaku atama))))))
+
+(defstruct ai
+  command-line
+  proc
+  stream
+  atama
+  name)
+
+;; AIから名前を受け取る。
+(defun receive-name (ai)
+  (handler-case
+   (let ((name (read-line (ai-stream ai))))
+     (when (equal name "")
+	   (format t "AIの名前が空です。~%")
+	   ;;(setf mozi (concatenate 'string mozi (format nil "AIの名前が空です。~%")))
+	   (error 'handshake-error))
+     (setf (ai-name ai) name
+	   (ai-atama ai) (atama-of name)))
+   (end-of-file (c)
+		(format t "~A~%" c)
+		;;(setf mozi (concatenate 'string mozi (format nil "~A~%" c)))
+		(error 'handshake-error))))
+
+(defun load-ai2 (com)
+  (destructuring-bind
+      (command-name . args)
+      (ppcre:split #\space com)
+    (let* ((proc (sb-ext:run-program
+		  command-name args
+		  :input :stream
+		  :output :stream
+		  :wait nil
+		  :search t))
+	   (stream (make-two-way-stream
+		    (sb-ext:process-output proc)
+		    (sb-ext:process-input proc)))
+	   (ai (make-ai :command-line com
+			:proc proc
+			:stream stream)))
+      (receive-name ai)
+      ai)))
 
 ;;ゲームオーバーメッセージ
 (defun game-over-message (p gamen)
@@ -114,10 +127,11 @@
 
 ;;装備モード入出力
 (defun equip-select (p item)
-  (let ((str nil))
-    (format *ai* "~a~%" (jonathan:to-json (equip-list p item)))
-    (finish-output *ai*)
-    (setf str (read-line *ai*))
+  (let ((str nil)
+	(ai-stream (ai-stream (nth (player-num p) *ais*))))
+    (format ai-stream "~a~%" (jonathan:to-json (equip-list p item)))
+    (finish-output ai-stream)
+    (setf str (read-line ai-stream))
     (cond
       ((string= str "YES")
        (format t "「~aを装備した。」~%" (first item))
@@ -217,13 +231,10 @@
 ;;プレイヤーの生死判定
 (defun player-dead (p)
   (<= (player-hp p) 0))
-;;プレイヤーのステータス表示(バトル時)
-(defun show-player (p)
-  (format t "Lv ~d, ~a : HP ~d/~d 力 ~d/~d 素早さ ~d/~d ~%"
-	      (player-level p) *ai-name* (player-hp p) (player-maxhp p)  (player-str p) (player-maxstr p)
-	      (player-agi p) (player-maxagi p))
+
+(defun show-player2 (p name)
   (format nil "Lv ~d, ~a : HP ~d/~d 力 ~d/~d 素早さ ~d/~d ~%"
-	      (player-level p) *ai-name* (player-hp p) (player-maxhp p)  (player-str p) (player-maxstr p)
+	      (player-level p) name (player-hp p) (player-maxhp p)  (player-str p) (player-maxstr p)
 	      (player-agi p) (player-maxagi p)))
 
 ;;モンスターの生死判定
@@ -439,7 +450,7 @@
        ;;(gamen-clear)
        (setf hoge (show-pick-monsters))
        (setf hoge (concatenate 'string hoge (status-and-command p)))
-       
+
        (cond
 	 ((string= act "HEAL")
 	  (setf hoge (concatenate 'string hoge (use-heal p))))
@@ -449,29 +460,27 @@
 	  (dotimes (x (1+ (randval (truncate (/ (player-str p) 3)))))
 	    (unless (monsters-dead)
 	      (monster-hit2 p (random-monster) 1))))
-	 (t
-	  (cond
-	    ((string= act "STAB")
-	     (format t "「~c に斬りかかった！」~%" (number->a (parse-integer (cadr str))))
-	     (setf hoge (concatenate 'string hoge
-				        (format nil"「~c に斬りかかった！」~%" (number->a (parse-integer (cadr str))))))
-	     (let ((m (aref *monsters* (parse-integer (cadr str)))))
-	       (monster-hit2 p m (+ 2 (randval (ash (player-str p) -1))))))
-	    ((string= act "DOUBLE")
-	     (format t "「~c と ~c にダブルアタック！」~%" (number->a (parse-integer (second str)))
-		     (number->a (parse-integer (third str))))
-	     (setf hoge (concatenate 'string hoge
-				     (format nil "「~c と ~c にダブルアタック！」~%"
-					     (number->a (parse-integer (second str)))
-					     (number->a (parse-integer (third str))))))
-	     (let ((m (aref *monsters* (parse-integer (second str))))
-		   (x (randval (truncate (/ (player-str p) 6)))))
-	       (monster-hit2 p m x) ;;選ばれたモンスターにダメージ与える
-	       (unless (monsters-dead) ;;生き残ってるモンスターがいるなら２回目の攻撃
-		 (let ((m2 (aref *monsters* (parse-integer (third str)))))
-		   (if (monster-dead m2)
-		       (monster-hit2 p (random-monster) x)
-		       (monster-hit2 p m2 x)))))))))
+	 ((string= act "STAB")
+	  (format t "「~c に斬りかかった！」~%" (number->a (parse-integer (cadr str))))
+	  (setf hoge (concatenate 'string hoge
+				  (format nil "「~c に斬りかかった！」~%" (number->a (parse-integer (cadr str))))))
+	  (let ((m (aref *monsters* (parse-integer (cadr str)))))
+	    (monster-hit2 p m (+ 2 (randval (ash (player-str p) -1))))))
+	 ((string= act "DOUBLE")
+	  (format t "「~c と ~c にダブルアタック！」~%" (number->a (parse-integer (second str)))
+		  (number->a (parse-integer (third str))))
+	  (setf hoge (concatenate 'string hoge
+				  (format nil "「~c と ~c にダブルアタック！」~%"
+					  (number->a (parse-integer (second str)))
+					  (number->a (parse-integer (third str))))))
+	  (let ((m (aref *monsters* (parse-integer (second str))))
+		(x (randval (truncate (/ (player-str p) 6)))))
+	    (monster-hit2 p m x) ;;選ばれたモンスターにダメージ与える
+	    (unless (monsters-dead) ;;生き残ってるモンスターがいるなら２回目の攻撃
+	      (let ((m2 (aref *monsters* (parse-integer (third str)))))
+		(if (monster-dead m2)
+		    (monster-hit2 p (random-monster) x)
+		  (monster-hit2 p m2 x)))))))
        (sleep *battle-delay-seconds*))
       (t (format t "~A~%" str-l) ;;規定文字列以外の表示(エラーとか)
 	 (setf *end* 2)))
@@ -537,7 +546,7 @@
        ((= *boss?* 1)
 	(setf *end* 1) ;;ラスボスならエンディングへ
 	(setf *battle-delay-seconds* *bds*) ;;バトルディレイを元に戻す
-	(victory-message)) 
+	(victory-message))
        ((= *boss?* 2)
 	(setf *ha2ne2* t) ;;中ボス倒したフラグ
 	(setf *battle-delay-seconds* *bds*))) ;;バトルディレイを元に戻す
@@ -554,75 +563,57 @@
       (format t "~a~%" (player-msg p)))
   (setf (player-msg p) nil))
 
-(defun map-type (num)
-  (case num
-    (30 "ロ") ;; 壁
-    (40 "ロ") ;; 壊せない壁
-    (0  "　")
-    (1  *ai-atama*) ;; プレイヤーの位置
-    (4  "薬") ;; 薬
-    (5  "ボ") ;;ボス
-    (3  "宝") ;; 宝箱
-    (2  "下") ;; 下り階段
-    (6  "イ") ;; イベント
-    (7  "ハ") ;; 中ボス ハツネツエリア
-    ))
-
-(defun map-type-gui (num)
+(defun map-char (num)
   (case num
     (30 "□") ;; 壁
     (40 "■") ;; 壊せない壁
     (0  "　")
-    (1  *ai-atama*) ;; プレイヤーの位置
     (4  "薬") ;; 薬
     (5  "ボ") ;;ボス
     (3  "宝") ;; 宝箱
     (2  "下") ;; 下り階段
     (6  "イ") ;; イベント
     (7  "ハ") ;; 中ボス ハツネツエリア
-    ))
+    (otherwise
+     (if (<= 10 num 13) ;; 10~13: AI1 AI2 AI3 AI4
+	 (ai-atama (nth (- num 10) *ais*))
+       (error (format nil "不明なセル番号: ~s" num))))))
 
-;;マップ表示+マップの情報リスト作成
-(defun show-map (map p)
-  ;;(gamen-clear)
-  (let ((hoge nil))
-    (format t "地下~d階  " (player-map p))
-    (setf hoge (format nil "地下~d階  " (player-map p)))
-    (setf hoge (concatenate 'string hoge (show-player p)))
-    (format t "~%")
+(defun write-player-stat (stream p name)
+  (format stream "~a" (show-player2 p name))
+  (destructuring-bind
+      (name str hp agi)
+      (player-buki p)
+    (format stream "武器 ~a" name)
+    (format stream " (HP:~d STR:~d AGI:~d)" hp str agi))
+  (format stream " 回復薬 ~d個" (player-heal p))
+  (format stream " ハンマー ~d個" (player-hammer p))
+  (format stream " Exp ~d" (player-exp p))
+  (fresh-line stream))
+
+(defun write-player-message (stream p)
+  (when (player-msg p)
+    (format stream "~a~a~%" (ai-name (nth (player-num p) *ais*)) (player-msg p))
+    (setf (player-msg p) nil)))
+
+(defun show-map2 (map players)
+  (let ((out (make-string-output-stream)))
+    (format out "地下~d階~%" (player-map (first players)))
+    (loop for p in players
+	  for ai in *ais*
+	  do
+	  (write-player-stat out p (ai-name ai)))
+    (fresh-line out)
     (loop for i from 0 below (donjon-tate map) do
       (loop for j from 0 below (donjon-yoko map) do
-	(let ((x (aref (donjon-map map) i j))
-	      (name (first (player-buki p)))
-	      (str  (second (player-buki p)))
-	      (hp  (third (player-buki p)))
-	      (agi (fourth (player-buki p))))
-	  (format t "~a" (map-type x))
-	  (setf hoge (concatenate 'string hoge (map-type-gui x)))
-	  (if (= j (- (donjon-yoko map) 1))
-	      (case i
-		(0 (format t " 武器[i]   ~a~%" name)
-		 (setf hoge (concatenate 'string hoge
-					(format nil " 武器[i]   ~a~%" name))))
-		(1 (format t "           HP:~d STR:~d AGI:~d~%" hp str agi)
-		 (setf hoge (concatenate 'string hoge
-					(format nil "           HP:~d STR:~d AGI:~d~%"
-						hp str agi))))
-		(2 (format t " 回復薬    ~d個~%" (player-heal p))
-		 (setf hoge (concatenate 'string hoge
-					(format nil " 回復薬    ~d個~%"
-						(player-heal p)))))
-		(3 (format t " ハンマー  ~d個~%" (player-hammer p))
-		 (setf hoge (concatenate 'string hoge
-					(format nil " ハンマー  ~d個~%" (player-hammer p)))))
-		(4 (format t " Exp       ~d/~d~%" (player-exp p) *lv-exp*)
-		 (setf hoge (concatenate 'string hoge
-					(format nil " Exp       ~d/~d~%"
-						(player-exp p) *lv-exp*))))
-		(otherwise (fresh-line)
-		 (setf hoge (concatenate 'string hoge "~%"))))))))
-    (show-msg p)
-    hoge))
+	    (format out "~a"
+		    (map-char (aref (donjon-map map) i j))))
+      (fresh-line out))
+    (loop for p in players
+	  for i from 0
+	  do
+	  (write-player-message out p))
+    (get-output-stream-string out)))
 
 (defun map-data-list (map)
   (let ((blocks nil)
@@ -696,7 +687,7 @@
 
 ;;プレイヤーの場所更新
 (defun update-player-pos (p x y map)
-  (setf (aref map (+ (player-posy p) y) (+ (player-posx p) x)) 1)
+  (setf (aref map (+ (player-posy p) y) (+ (player-posx p) x)) (+ 10 (player-num p)))
   (setf (aref map (player-posy p) (player-posx p)) 0)
   (setf (player-posy p) (+ (player-posy p) y)
 	(player-posx p) (+ (player-posx p) x)))
@@ -748,31 +739,29 @@
            *boss?* 2))
     (otherwise
      (update-player-pos p x y (donjon-map map))
-     (if (= (randval 13) 1) ;;敵との遭遇確率
+     (if nil; (= (randval 13) 1) ;;敵との遭遇確率
 	 (setf *battle?* t)))))
 
-;;マップ情報とプレイヤー情報を渡して移動先を受け取る
-(defun map-move (map p gamen)
-  (unless (or *battle?* (= *end* 2))
-    ;;バトル時と差別化するため先頭にmapってのいれとく.1は特に意味なし
-    (let ((json (append (list :|map| 1) (player-list p) (map-data-list map)))
-	  (str nil))
-      (format *ai* "~a~%" (jonathan:to-json json)) ;;データ送る
-      (finish-output *ai*) ;;なぞ
-      (setf str (read-line *ai*)) ;;データもらう
-      
-      (cond
-	((find str '("UP" "DOWN" "RIGHT" "LEFT" "HEAL") :test #'equal)
-	 (setf (text gamen) (format nil (concatenate 'string (show-map map p) str)))
-	 (cond 
-	   ((equal str "UP") (update-map map p -1 0))
-	   ((equal str "DOWN") (update-map map p 1 0))
-	   ((equal str "RIGHT") (update-map map p 0 1))
-	   ((equal str "LEFT") (update-map map p 0 -1))
-	   ((equal str "HEAL") (use-heal p)))
-	 (format t "~a~%" str) ;;アクション表示
-	 (sleep *map-delay-seconds*))
-	(t (format t "~a~%" str)))))) ;;規定の出力以外(エラーとか)を表示
+(defun map-move2 (map p ai)
+  (when (or *battle?* (= *end* 2))
+    (return-from map-move2))
+
+  ;;バトル時と差別化するため先頭にmapってのいれとく。1は特に意味なし
+  (let ((json (append (list :|map| 1) (player-list p) (map-data-list map))))
+    (format (ai-stream ai) "~a~%" (jonathan:to-json json)) ;;データ送る
+    (finish-output (ai-stream ai))) ;;なぞ
+
+  (let ((str (read-line (ai-stream ai)))) ;;データもらう
+    (cond
+     ((equal str "UP")    (update-map map p -1  0))
+     ((equal str "DOWN")  (update-map map p  1  0))
+     ((equal str "RIGHT") (update-map map p  0  1))
+     ((equal str "LEFT")  (update-map map p  0 -1))
+     ((equal str "HEAL")  (use-heal p))
+     (t
+      (error (format nil "マップモードで無効のコマンド: ~s (~a)" str (ai-name ai)))))
+    (format t "~a: ~a~%" (ai-name ai) str) ;;アクション表示
+    (sleep *map-delay-seconds*)))
 
 ;;エンディング
 (defun ending (gamen)
@@ -791,143 +780,161 @@
     (setf hoge (concatenate 'string hoge (ranking-dialog ss)))
     (setf (text gamen) (format nil hoge))))
 
+;; (defun main-gui (map p gamen)
+;;   (cond
+;;     ((or (= *end* 2) (player-dead p))
+;;      nil)
+;;     (*battle?*
+;;      (orc-battle p gamen)
+;;      (if (= *end* 1) ;;ゲームクリア
+;; 	 (ending gamen)))
+;;     (t
+;;      (map-move map p gamen))))
 
-
-(defun main-gui (map p gamen)
-  (cond
-    ((or (= *end* 2) (player-dead p))
-     nil)
-    (*battle?*
-     (orc-battle p gamen)
-     (if (= *end* 1) ;;ゲームクリア
-	 (ending gamen)))
-    (t
-     (map-move map p gamen))))
-
-
-(defun game-rupu (map p gamen)
+(defun game-rupu (map players gamen)
   (handler-case
-      (loop while *rupu* do
-	(main-gui map p gamen)
-	(if (or (= *end* 1) (= *end* 2))
-	    (setf *rupu* nil))
-	(ltk:process-events)) ;;なんかループするとき必要ぽい
-    (sb-int:simple-stream-error (c);;AIの終了などによってデータの受け渡しができない。
-      (format t "ストリームエラーが発生しました。~%")
-      (format t "~A~%" c)
-      (setf (text gamen) (format nil "ストリームエラーが発生しました。~%~A~%" c)))
-    (end-of-file (c);;AIからデータを受け取ることができない。
-      (format t "~A~%" c)
-      (setf (text gamen) (format nil "~A~%" c)))))
+   (loop while *rupu*
+	 do
+	 ;;(main-gui map p gamen)
+	 (setf (text gamen) (show-map2 map players))
+	 (loop for p in players
+	       for ai in *ais*
+	       do
+	       (map-move2 map p ai))
+	 (if (or (= *end* 1) (= *end* 2))
+	     (setf *rupu* nil))
+	 (ltk:process-events)) ;;なんかループするとき必要ぽい
+   (sb-int:simple-stream-error (c);;AIの終了などによってデータの受け渡しができない。
+			       (format t "ストリームエラーが発生しました。~%")
+			       (format t "~A~%" c)
+			       (setf (text gamen) (format nil "ストリームエラーが発生しました。~%~A~%" c)))
+   (end-of-file (c);;AIからデータを受け取ることができない。
+		(format t "~A~%" c)
+		(setf (text gamen) (format nil "~A~%" c)))))
 
+(defun load-ais (command-lines)
+  (setf *ais* (mapcar #'load-ai2 command-lines)))
 
-(defun restart-da (ai-load)
-  (let ((hoge nil))
-    (kill-proc)
-    (init-data)
-    
-    (handler-case
-	(setf hoge (load-ai (text ai-load)))
-      (simple-error (c);;AIコマンドが存在しない、実行許可がないなど
-	(format t "~A~%" c)
-	(setf hoge (concatenate 'string hoge (format nil " ~A~%" c))))
-      (handshake-error (c)
-	(declare (ignore c))
-	(format t "AIから名前を受け取ることができませんでした。~%")
-	(setf hoge (concatenate 'string hoge (format nil "AIから名前を受け取ることができませんでした。~%")))))
-    (format t "再挑戦！~%")
-    ;;(game-rupu map p gamen)))
-    (setf hoge (concatenate 'string hoge (format nil "再挑戦します。~%スタートボタンを押してください。")))
-    hoge))
+(defun substitute-ambiguous-width-characters (str)
+  (map 'string
+       (lambda (c)
+	 (case c
+	   (#\□
+	    #\口)
+	   (#\■
+	    #\口)
+	   (otherwise
+	    c)))
+       str))
+
+;; ドンジョンの行き止まりリストから何も置かれていない点を選んでプレー
+;; ヤーを置く。
+(defun random-place-player (map p)
+  (flet ((vacantp (pt)
+		 (destructuring-bind (y x) pt
+		   (case (aref (donjon-map map) y x)
+		     (0 t)
+		     (3 t)
+		     (otherwise nil)))))
+    (let ((candidates (loop for pt in (donjon-stop-list map)
+			    when (vacantp pt)
+			    collect pt)))
+      (unless candidates
+	(error "プレーヤー~aを置ける場所がありません。" (player-num p)))
+      (place-player map p (sample candidates)))))
+
+;; 点 (y x) にプレーヤーを置く。マップの該当のセルにプレーヤー番号がセッ
+;; トされ、プレーヤー構造体の posy posx が適切に更新される。
+(defun place-player (map player point)
+  (destructuring-bind (y x) point
+    (setf (aref (donjon-map map) y x) (+ 10 (player-num player))
+          (player-posy player) y
+	  (player-posx player) x)))
+
+;; リストから要素をランダムに選んで返す。
+(defun sample (xs)
+  (nth (random (length xs)) xs))
 
 (defun gui-start ()
-  (let ((p (make-player))
-        (map (make-donjon)))
-    (setf *random-state* (make-random-state t))
-    (maze map p)
-    (with-ltk ()
-      (wm-title *tk* "もげRPGAIサーバーGUI")
-      (bind *tk* "<Alt-q>"
-	    (lambda (event)
-	      (declare (ignore event))
-	      (return-from gui-start)))
-      (set-geometry *tk* 700 550 200 200)
-      (let* ((f (make-instance 'frame))
-	     (f2 (make-instance 'frame :width 500 :height 400))
-	     (f0 (make-instance 'frame))
-	     (fr0 (make-instance 'labelframe :width 10 :master f0 :text "AI起動コマンド"))
-	     (fr1 (make-instance 'labelframe :width 5 :master f :text "バトルディレイ"))
-	     (fr2 (make-instance 'labelframe :width 5 :master f :text "マップディレイ"))
-	     (fr3 (make-instance 'labelframe :width 5 :master f :text "もげぞうディレイ"))
-	     (fr4 (make-instance 'labelframe :width 500 :height 400 :master f2 :text "画面"))
-	     (gamen (make-instance 'label :master fr4 :width 500 :text (format nil "AIを読み込んでください。")
-					  :font "Takaoゴシック 14 normal"))
-	     (ai-load (make-instance 'entry :width 20 :master fr0 :text (get-ai-command-line)))
-	     (ai-btn (make-instance 'button :master fr0 :text "AI読み込み！"))
-	     (clear-btn  (make-instance 'button :master f0 :text "初期化"))
-	     (restart-btn  (make-instance 'button :master f :text "再挑戦"))
-	     ;;(pass (make-instance 'entry :width 5 :master fr2))
-	     (vals (list 0 1 2 3 4 5 6 7 8 9 10)) ;;ディレイ秒数リスト
-	     (battle-d (make-instance 'spinbox :width 5 :master fr1 :from 0 :to 10 :text 3 :relief "solid"
-				      ;;初期値設定するためには:valuesではなく:from :toを使って:textで初期値を決める
-					       :command (lambda (val) ;;文字列になってる
-							  (setf *battle-delay-seconds*
-								(/ (parse-integer val) 10.0)
-								*bds* (/ (parse-integer val) 10.0)))))
-	     (map-d (make-instance 'spinbox :width 5 :master fr2 :from 0 :to 10 :text 3
-					    :command (lambda (val) (setf *map-delay-seconds*
-									 (/ (parse-integer val) 10.0)))))
-	     (moge-d (make-instance 'spinbox :width 5 :master fr3 :from 0 :to 10 :text 3
-					     :command (lambda (val) (setf *boss-delay-seconds*
-									  (/ (parse-integer val) 10.0)))))
-	     (stop-btn (make-instance 'button :master f :text "ストップ！"))
-	     (start-btn (make-instance 'button :master f :text "スタート！")))
-	(pack f0)
-	(pack (list fr0 ai-load ai-btn clear-btn) :fill :both :side :left)
-	(pack f)
-	(pack f2 )
-	(pack (list fr3 fr1 fr2 start-btn stop-btn restart-btn) :fill :both :side :left :expand t)
-	(pack (list moge-d battle-d map-d) :fill :both :side :left :expand t)
-	(pack fr4 )
-	(pack gamen )
-	(setf (command start-btn);;スタートボタン
-	      (lambda ()
-		(if (null *ai-name*)
-		    (setf (text gamen) (format nil "AIを読み込んでください！！"))
-		    (progn
-		      (setf *rupu* t
-			    *battle-end* nil)
-		      (game-rupu map p gamen)))))
-	(setf (command stop-btn) ;;ストップボタン
-	      (lambda () (setf *rupu* nil)))
-	(setf (command clear-btn);;初期化ボタン
-	      (lambda ()
-		(kill-proc)
-		(init-data)
-		(setf p (make-player)
-		      map (make-donjon)
-		      *battle-end* t
-		      *rupu* nil)
-		(maze map p)
-		(setf (text gamen) (format nil "初期化されました。~%AIを読み込んでください。"))))
-	(setf (command restart-btn) ;;再挑戦ボタン
-	      (lambda ()
-		(setf p (make-player)
-		      map (make-donjon)
-		      *battle-end* t
-		      *rupu* nil)
-		(maze map p)
-		(setf (text gamen) (format nil (restart-da ai-load)))))
-	(setf (command ai-btn) ;;AI読み込みボタン
-	      (lambda ()
-		(handler-case
-		    (setf (text gamen) (format nil (load-ai (text ai-load))))
-		  (simple-error (c);;AIコマンドが存在しない、実行許可がないなど
-		    (format t "~A~%" c)
-		    (setf (text gamen) (format nil "~A~%" c)))
-		  (handshake-error (c)
-		    (declare (ignore c))
-		    (format t "AIから名前を受け取ることができませんでした。~%")
-		    (setf (text gamen) (format nil "AIから名前を受け取ることができませんでした。~%"))))))
-	))))
-
+  (setf *random-state* (make-random-state t))
+  (with-ltk
+   ()
+   (wm-title *tk* "もげRPGAIサーバーGUI")
+   (bind *tk* "<Alt-q>"
+	 (lambda (event)
+	   (declare (ignore event))
+	   (return-from gui-start)))
+   (set-geometry *tk* 700 550 200 200)
+   (configure *tk* :padx 16 :pady 16)
+   (let* ((f (make-instance 'frame))
+	  (f2 (make-instance 'frame :width 500 :height 400))
+	  (f0 (make-instance 'frame))
+	  (fr0 (make-instance 'labelframe :width 10 :master f0 :text "AI起動コマンド"))
+	  (fr1 (make-instance 'labelframe :width 5 :master f :text "バトルディレイ"))
+	  (fr2 (make-instance 'labelframe :width 5 :master f :text "マップディレイ"))
+	  (fr3 (make-instance 'labelframe :width 5 :master f :text "もげぞうディレイ"))
+	  (fr4 (make-instance 'labelframe :width 500 :height 400 :master f2 :text "画面"))
+	  (gamen (make-instance 'label :master fr4 :width 500 :text (format nil "AIを読み込んでください。")
+				:font "Takaoゴシック 14 normal"))
+	  (ai-entry1 (make-instance 'entry :width 75 :master fr0 :text (get-ai-command-line)))
+	  (ai-entry2 (make-instance 'entry :width 75 :master fr0 :text ""))
+	  (ai-entry3 (make-instance 'entry :width 75 :master fr0 :text ""))
+	  (ai-entry4 (make-instance 'entry :width 75 :master fr0 :text ""))
+	  (ai-entries (list ai-entry1 ai-entry2 ai-entry3 ai-entry4))
+	  (vals (list 0 1 2 3 4 5 6 7 8 9 10)) ;;ディレイ秒数リスト
+	  (battle-d (make-instance 'spinbox :width 5 :master fr1 :from 0 :to 10 :text 3 :relief "solid"
+				   ;;初期値設定するためには:valuesではなく:from :toを使って:textで初期値を決める
+				   :command (lambda (val) ;;文字列になってる
+					      (setf *battle-delay-seconds*
+						    (/ (parse-integer val) 10.0)
+						    *bds* (/ (parse-integer val) 10.0)))))
+	  (map-d (make-instance 'spinbox :width 5 :master fr2 :from 0 :to 10 :text 3
+				:command (lambda (val)
+					   (setf *map-delay-seconds*
+						 (/ (parse-integer val) 10.0)))))
+	  (moge-d (make-instance 'spinbox :width 5 :master fr3 :from 0 :to 10 :text 3
+				 :command (lambda (val)
+					    (setf *boss-delay-seconds*
+						  (/ (parse-integer val) 10.0)))))
+	  (stop-btn (make-instance 'button :master f :text "ストップ！"))
+	  (start-btn (make-instance 'button :master f :text "スタート！"))
+	  (clear-btn  (make-instance 'button :master f :text "初期化")))
+     (pack f0)
+     (pack fr0 :fill :both :side :left)
+     (pack (list ai-entry1 ai-entry2 ai-entry3 ai-entry4))
+     (pack f)
+     (pack f2)
+     (pack (list fr3 fr1 fr2 start-btn stop-btn clear-btn) :fill :both :side :left :expand t)
+     (pack (list moge-d battle-d map-d) :fill :both :side :left :expand t)
+     (pack fr4)
+     (pack gamen)
+     (let ((players nil) (map nil))
+       (setf (command start-btn);;スタートボタン
+	     (lambda ()
+	       (when (null *ais*)
+		 (kill-all-ais)
+		 ;; 最初に空欄があった位置で打ち切る。
+		 (let ((lines (loop
+			       for s in (mapcar #'text ai-entries)
+			       until (zerop (length s))
+			       collect s)))
+		   (load-ais lines))
+		 (init-data)
+		 (setf players (loop for i below (length *ais*) collect (make-player :num i)))
+		 (setf map (make-random-donjon))
+		 (loop for p in players do (random-place-player map p)))
+	       (setf *rupu* t
+		     *battle-end* nil)
+	       (game-rupu map players gamen))))
+     (setf (command stop-btn) ;;ストップボタン
+	   (lambda ()
+	     (setf *rupu* nil)))
+     (setf (command clear-btn);;初期化ボタン
+	   (lambda ()
+	     (kill-all-ais)
+	     (setf *ais* nil)
+	     (init-data)
+	     (setf *battle-end* t
+		   *rupu* nil)
+	     (setf (text gamen) (format nil "初期化されました。~%AIを読み込んでください。"))))
+     )))
